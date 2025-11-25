@@ -1,0 +1,89 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id        Int      @id @default(autoincrement())
+  email     String   @unique
+  name      String?
+  password  String?
+  role      Role     @relation(fields: [roleId], references: [id])
+  roleId    Int
+  createdAt DateTime @default(now())
+}
+
+model Role {
+  id    Int     @id @default(autoincrement())
+  name  String  @unique
+  users User[]
+  employees Employee[]
+  risks Risk[] @relation("RoleRisks")
+}
+
+model Risk {
+  id    Int      @id @default(autoincrement())
+  name  String
+  note  String?
+  roles Role[]  @relation("RoleRisks")
+  ppeItems PpeItem[] @relation("PPERisks")
+}
+
+model Employee {
+  id          Int           @id @default(autoincrement())
+  firstName   String
+  lastName    String
+  email       String?        @unique
+  phone       String?
+  roleId      Int?
+  role        Role?          @relation(fields: [roleId], references: [id])
+  assignments PpeAssignment[]
+  checkLogs   CheckLog[]
+}
+
+model PpeItem {
+  id          Int    @id @default(autoincrement())
+  name        String
+  sku         String? @unique
+  description String?
+  photoUrl    String?
+  manualUrl   String?
+  risks       Risk[]  @relation("PPERisks")
+  stock       StockItem?
+  assignments PpeAssignment[]
+  checkLogs   CheckLog[]
+}
+
+model StockItem {
+  id        Int     @id @default(autoincrement())
+  ppeId     Int     @unique
+  quantity  Int     @default(0)
+  minLevel  Int     @default(5)
+  ppe       PpeItem @relation(fields: [ppeId], references: [id])
+}
+
+model PpeAssignment {
+  id          Int      @id @default(autoincrement())
+  ppeId       Int
+  employeeId  Int
+  deliveredAt DateTime @default(now())
+  expiresAt   DateTime?
+  status      String   @default("assigned")
+  ppe         PpeItem  @relation(fields: [ppeId], references: [id])
+  employee    Employee @relation(fields: [employeeId], references: [id])
+}
+
+model CheckLog {
+  id          Int      @id @default(autoincrement())
+  employeeId  Int
+  ppeId       Int
+  checkedAt   DateTime @default(now())
+  notes       String?
+  ok          Boolean
+  employee    Employee @relation(fields: [employeeId], references: [id])
+  ppe         PpeItem  @relation(fields: [ppeId], references: [id])
+}

@@ -1,10 +1,9 @@
 import Layout from '../components/Layout'
 import useSWR from 'swr'
-
-const fetcher = (url) => fetch(url).then(r => r.json())
+import fetcher from '../utils/fetcher'
 
 export default function Dashboard() {
-  const { data, error } = useSWR('http://localhost:4000/api/reports/summary', fetcher)
+  const { data, error } = useSWR(`${process.env.NEXT_PUBLIC_API_BASE || 'http://localhost:4000'}/api/reports/summary`, fetcher)
   if (error) return <Layout><div>Error loading</div></Layout>
   return (
     <Layout>

@@ -1,6 +1,24 @@
 import Link from 'next/link'
+import { useEffect, useState } from 'react'
 
 export default function Layout({ children }) {
+  const [user, setUser] = useState(null)
+
+  useEffect(() => {
+    try {
+      const u = JSON.parse(localStorage.getItem('robecop_user') || 'null')
+      setUser(u)
+    } catch (e) { setUser(null) }
+  }, [])
+
+  function logout() {
+    localStorage.removeItem('robecop_token')
+    localStorage.removeItem('robecop_user')
+    setUser(null)
+    // full reload to clear any cached requests
+    window.location.href = '/'
+  }
+
   return (
     <div className="min-h-screen bg-gray-50">
       <header className="bg-white shadow">
@@ -12,9 +30,14 @@ export default function Layout({ children }) {
             <Link href="/employees">Employees</Link>
             <Link href="/ppe">PPE Database</Link>
             <Link href="/assign">Assign</Link>
-            <a className="ml-4 inline-flex items-center px-3 py-1 border rounded text-sm bg-blue-600 text-white" href={`${process.env.NEXT_PUBLIC_API_BASE || 'http://localhost:4000'}/auth/entra/login`}>
-              Sign in with Microsoft
-            </a>
+                {user ? (
+                  <div className="flex items-center space-x-3 ml-4">
+                    <span className="text-sm text-gray-600">{user.email}</span>
+                    <button onClick={logout} className="text-sm text-primary-700">Logout</button>
+                  </div>
+                ) : (
+                  <Link href="/login" className="ml-4">Sign in</Link>
+                )}
           </nav>
         </div>
       </header>
@@ -24,4 +47,20 @@ export default function Layout({ children }) {
       </footer>
     </div>
   )
+  const [user, setUser] = useState(null)
+
+  useEffect(() => {
+    try {
+      const u = JSON.parse(localStorage.getItem('robecop_user') || 'null')
+      setUser(u)
+    } catch (e) { setUser(null) }
+  }, [])
+
+  function logout() {
+    localStorage.removeItem('robecop_token')
+    localStorage.removeItem('robecop_user')
+    setUser(null)
+    // full reload to clear any cached requests
+    window.location.href = '/'
+  }
 }

@@ -36,6 +36,7 @@ Open `http://localhost:3000` for frontend and `http://localhost:4000` for backen
 
 Notes
 - Authentication: JWT-based in this scaffold. Placeholder for Microsoft Entra ID integration is included in the backend auth route.
+ - Authentication: JWT-based in this scaffold by default. You can enable Microsoft Entra ID (SSO) by setting `AUTH_MODE=entra` and configuring the Azure app (not enabled by default in this scaffold).
 - Email notifications: skeleton using `nodemailer` and env vars — configure SMTP in `.env`.
 - This is a scaffold tailored to the requested features. Extend business logic, tests, and production deployment steps as needed for your intranet.
 # Robecop

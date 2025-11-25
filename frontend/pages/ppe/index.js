@@ -1,10 +1,9 @@
 import Layout from '../../components/Layout'
 import useSWR from 'swr'
-
-const fetcher = (url) => fetch(url).then(r => r.json())
+import fetcher from '../../utils/fetcher'
 
 export default function Ppe() {
-  const { data, error } = useSWR('http://localhost:4000/api/ppe', fetcher)
+  const { data, error } = useSWR(`${process.env.NEXT_PUBLIC_API_BASE || 'http://localhost:4000'}/api/ppe`, fetcher)
   return (
     <Layout>
       <h2 className="text-2xl font-semibold mb-4">PPE Database</h2>

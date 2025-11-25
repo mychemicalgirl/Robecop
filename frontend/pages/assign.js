@@ -9,13 +9,16 @@ export default function Assign() {
   const [expiresAt, setExpiresAt] = useState('')
 
   useEffect(()=>{
-    fetch('http://localhost:4000/api/employees').then(r=>r.json()).then(setEmployees)
-    fetch('http://localhost:4000/api/ppe').then(r=>r.json()).then(setPpe)
+    const base = process.env.NEXT_PUBLIC_API_BASE || 'http://localhost:4000'
+    fetch(`${base}/api/employees`).then(r=>r.json()).then(setEmployees)
+    fetch(`${base}/api/ppe`).then(r=>r.json()).then(setPpe)
   }, [])
 
   async function submit(e){
     e.preventDefault()
-    await fetch('http://localhost:4000/api/assign', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer TEST_TOKEN' }, body: JSON.stringify({ ppeId: Number(selectedPpe), employeeId: Number(selectedEmp), expiresAt }) })
+    const base = process.env.NEXT_PUBLIC_API_BASE || 'http://localhost:4000'
+    const token = localStorage.getItem('robecop_token')
+    await fetch(`${base}/api/assign`, { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: token ? `Bearer ${token}` : '' }, body: JSON.stringify({ ppeId: Number(selectedPpe), employeeId: Number(selectedEmp), expiresAt }) })
     alert('Assigned (check backend logs).')
   }
 

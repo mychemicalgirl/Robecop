@@ -5,6 +5,34 @@ const bcrypt = require('bcrypt')
 const { body, validationResult } = require('express-validator')
 const prisma = require('../prismaClient')
 const { cca } = require('../msalClient')
+const loginLimiter = require('../middleware/rateLimiter')
+const crypto = require('crypto')
+
+// In-memory refresh token store: token -> { userId, expiresAt, createdAt }
+// NOTE: For production, persist refresh tokens (DB or Redis) and support revocation/rotation.
+const refreshTokens = new Map()
+
+function generateRefreshToken() {
+  return crypto.randomBytes(48).toString('hex')
+}
+
+function createRefreshTokenForUser(userId) {
+  const token = generateRefreshToken()
+  const days = parseInt(process.env.REFRESH_TOKEN_EXPIRES_DAYS || '7', 10)
+  const expiresAt = new Date(Date.now() + days * 24 * 60 * 60 * 1000)
+  refreshTokens.set(token, { userId, expiresAt, createdAt: new Date() })
+  return { token, expiresAt }
+}
+
+function verifyRefreshToken(token) {
+  const rec = refreshTokens.get(token)
+  if (!rec) return null
+  if (rec.expiresAt && new Date() > rec.expiresAt) {
+    refreshTokens.delete(token)
+    return null
+  }
+  return rec
+}
 
 // Read AUTH_MODE from env: 'JWT' (local) or 'ENTRA' (MS Entra ID)
 const AUTH_MODE = (process.env.AUTH_MODE || 'JWT').toUpperCase()
@@ -21,6 +49,7 @@ function getAuthCodeUrlParams() {
 // Local JWT login for scaffold/testing
 // In production you may integrate Microsoft Entra ID (OAuth2) and exchange tokens
 router.post('/login',
+  loginLimiter,
   body('email').isEmail(),
   body('password').isLength({ min: 4 }),
   async (req, res) => {
@@ -32,13 +61,24 @@ router.post('/login',
     if (!user) return res.status(401).json({ error: 'Invalid credentials' })
     const ok = await bcrypt.compare(password, user.password || '')
     if (!ok) return res.status(401).json({ error: 'Invalid credentials' })
-    const token = jwt.sign({ userId: user.id }, process.env.JWT_SECRET || 'change_this_secret', { expiresIn: '8h' })
-    // If configured, set token as HttpOnly cookie for browser sessions
+    const accessExpiryMinutes = parseInt(process.env.ACCESS_TOKEN_EXPIRES_MINUTES || '15', 10)
+    const accessToken = jwt.sign({ userId: user.id }, process.env.JWT_SECRET || 'change_this_secret', { expiresIn: `${accessExpiryMinutes}m` })
+
+    // Create refresh token (in-memory for now)
+    const { token: refreshToken, expiresAt } = createRefreshTokenForUser(user.id)
+
+    // If configured, set refresh token as HttpOnly cookie for browser sessions
     if ((process.env.USE_COOKIES || 'false') === 'true') {
       const isSecure = (process.env.NODE_ENV || 'development') === 'production'
-      res.cookie('robecop_token', token, { httpOnly: true, secure: isSecure, sameSite: 'lax', maxAge: 1000 * 60 * 60 * 8 })
+      const sameSite = process.env.COOKIE_SAMESITE || 'lax'
+      res.cookie('refresh_token', refreshToken, { httpOnly: true, secure: isSecure, sameSite, maxAge: (expiresAt - Date.now()) })
+      // Optionally set access token as cookie as well (short-lived)
+      res.cookie('access_token', accessToken, { httpOnly: true, secure: isSecure, sameSite, maxAge: accessExpiryMinutes * 60 * 1000 })
+      return res.json({ user: { id: user.id, email: user.email, role: user.role.name } })
     }
-    res.json({ token, user: { id: user.id, email: user.email, role: user.role.name } })
+
+    // If not using cookies, return both tokens in the response body (include legacy `token` field)
+    res.json({ token: accessToken, accessToken, refreshToken, expiresAt, user: { id: user.id, email: user.email, role: user.role.name } })
   })
 
 // Simple registration route for bootstrap/testing
@@ -118,4 +158,43 @@ router.get('/entra/callback', async (req, res) => {
   }
 })
 
+// Exchange refresh token for a new access token
+router.post('/refresh', async (req, res) => {
+  const token = req.cookies && req.cookies.refresh_token ? req.cookies.refresh_token : (req.body && req.body.refreshToken)
+  if (!token) return res.status(400).json({ error: 'No refresh token provided' })
+  const rec = verifyRefreshToken(token)
+  if (!rec) return res.status(401).json({ error: 'Refresh token invalid or expired' })
+  // Rotate tokens: remove old, issue new
+  refreshTokens.delete(token)
+  const { token: newRefreshToken, expiresAt } = createRefreshTokenForUser(rec.userId)
+  const accessExpiryMinutes = parseInt(process.env.ACCESS_TOKEN_EXPIRES_MINUTES || '15', 10)
+  const accessToken = jwt.sign({ userId: rec.userId }, process.env.JWT_SECRET || 'change_this_secret', { expiresIn: `${accessExpiryMinutes}m` })
+
+  if ((process.env.USE_COOKIES || 'false') === 'true') {
+    const isSecure = (process.env.NODE_ENV || 'development') === 'production'
+    const sameSite = process.env.COOKIE_SAMESITE || 'lax'
+    res.cookie('refresh_token', newRefreshToken, { httpOnly: true, secure: isSecure, sameSite, maxAge: (expiresAt - Date.now()) })
+    res.cookie('access_token', accessToken, { httpOnly: true, secure: isSecure, sameSite, maxAge: accessExpiryMinutes * 60 * 1000 })
+    return res.json({ ok: true })
+  }
+
+  // Return legacy `token` field for compatibility
+  res.json({ token: accessToken, accessToken, refreshToken: newRefreshToken, expiresAt })
+})
+
+// Logout / revoke refresh token
+router.post('/logout', async (req, res) => {
+  const token = req.cookies && req.cookies.refresh_token ? req.cookies.refresh_token : (req.body && req.body.refreshToken)
+  if (token) {
+    refreshTokens.delete(token)
+  }
+  if ((process.env.USE_COOKIES || 'false') === 'true') {
+    res.clearCookie('refresh_token')
+    res.clearCookie('access_token')
+  }
+  res.json({ ok: true })
+})
+
 module.exports = router
+
+

@@ -14,42 +14,11 @@ const app = express()
 
 // CORS: restrict to intranet / trusted frontend origins
 const allowed = (process.env.ALLOWED_ORIGINS || 'http://localhost:3000').split(',').map(s => s.trim()).filter(Boolean)
-app.use(cors({
-  origin: function (origin, callback) {
-    // Allow requests with no origin (mobile apps, curl, same-origin)
-    if (!origin) return callback(null, true)
-    if (allowed.indexOf(origin) !== -1) return callback(null, true)
-    return callback(new Error('CORS policy: origin not allowed'))
-  },
-  credentials: true
-}))
-app.use(bodyParser.json())
-app.use(cookieParser())
-
-// If cookies are used for auth, enable CSRF protection for state-changing routes
-if ((process.env.USE_COOKIES || 'false') === 'true') {
-  app.use(csurf({ cookie: true }))
-  // expose a small endpoint for the frontend to fetch CSRF token
-  app.get('/csrf-token', (req, res) => {
-    res.json({ csrfToken: req.csrfToken() })
-  })
-}
-
-const path = require('path')
-const fs = require('fs')
-
-// Ensure uploads directory exists
-const uploadsDir = path.join(__dirname, '..', 'uploads')
-if (!fs.existsSync(uploadsDir)) fs.mkdirSync(uploadsDir, { recursive: true })
-
-// Serve uploaded files statically at /uploads
-app.use('/uploads', express.static(uploadsDir))
-
-app.use('/auth', authRoutes)
-app.use('/api', apiRoutes)
-
-// Simple health endpoint
-app.get('/health', (req, res) => res.json({ status: 'ok' }))
+// start server
+const app = require('./app')
+const prisma = require('./prismaClient')
+const nodemailer = require('nodemailer')
+const cron = require('node-cron')
 
 // Email helper (configure SMTP via env)
 const transporter = nodemailer.createTransport({
@@ -70,7 +39,6 @@ cron.schedule('0 8 * * *', async () => {
     if (items.length) {
       const text = items.map(i => `${i.ppe.name} for ${i.employee.firstName} ${i.employee.lastName} expires ${i.expiresAt}`).join('\n')
       console.log('Sending expiry alerts:\n', text)
-      // In production, send email to supervisors
       if (process.env.FROM_EMAIL && process.env.SMTP_HOST) {
         await transporter.sendMail({
           from: process.env.FROM_EMAIL,
@@ -78,6 +46,13 @@ cron.schedule('0 8 * * *', async () => {
           subject: 'PPE Expiration Alerts',
           text
         })
+      }
+    }
+  } catch (err) { console.error('Cron error', err) }
+})
+
+const port = process.env.PORT || 4000
+app.listen(port, () => console.log(`Backend running on http://localhost:${port}`))
       }
     }
   } catch (err) { console.error('Cron error', err) }

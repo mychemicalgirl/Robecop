@@ -62,6 +62,37 @@ async function main() {
     })
   }
 
+  // Create recommended PPE mappings (role + risk -> ppe)
+  const roleMap = {}
+  for (const r of roles) roleMap[r.name] = r
+  const allRisks = await prisma.risk.findMany()
+  const riskMap = {}
+  for (const r of allRisks) riskMap[r.name] = r
+  const ppeMap = {}
+  for (const p of allPPE) ppeMap[p.name] = p
+
+  // Example mappings
+  const mappings = [
+    { roleName: 'Supervisor', riskName: 'Welding', ppeName: 'Welding Helmet' },
+    { roleName: 'Employee', riskName: 'Noise', ppeName: 'Ear Muffs' },
+    { roleName: 'Employee', riskName: 'Metal Cutting', ppeName: 'Safety Glasses' }
+  ]
+
+  for (const m of mappings) {
+    const role = roleMap[m.roleName]
+    const risk = riskMap[m.riskName]
+    const ppe = ppeMap[m.ppeName]
+    if (role && risk && ppe) {
+      await prisma.recommendedPpe.upsert({
+        where: {
+          roleId_riskId_ppeId: { roleId: role.id, riskId: risk.id, ppeId: ppe.id }
+        },
+        update: {},
+        create: { roleId: role.id, riskId: risk.id, ppeId: ppe.id }
+      }).catch(()=>{})
+    }
+  }
+
   console.log('Seeding complete')
 }
 

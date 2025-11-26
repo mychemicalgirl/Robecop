@@ -23,6 +23,7 @@ model Role {
   users User[]
   employees Employee[]
   risks Risk[] @relation("RoleRisks")
+  recommendedPpes RecommendedPpe[]
 }
 
 model Risk {
@@ -31,6 +32,7 @@ model Risk {
   note  String?
   roles Role[]  @relation("RoleRisks")
   ppeItems PpeItem[] @relation("PPERisks")
+  recommendedPpes RecommendedPpe[]
 }
 
 model Employee {
@@ -56,6 +58,7 @@ model PpeItem {
   stock       StockItem?
   assignments PpeAssignment[]
   checkLogs   CheckLog[]
+  recommendedPpes RecommendedPpe[]
 }
 
 model StockItem {
@@ -86,4 +89,16 @@ model CheckLog {
   ok          Boolean
   employee    Employee @relation(fields: [employeeId], references: [id])
   ppe         PpeItem  @relation(fields: [ppeId], references: [id])
+}
+
+// RecommendedPpe: mapping of role + risk -> recommended PPE item
+model RecommendedPpe {
+  id       Int     @id @default(autoincrement())
+  roleId   Int
+  riskId   Int
+  ppeId    Int
+  role     Role    @relation(fields: [roleId], references: [id])
+  risk     Risk    @relation(fields: [riskId], references: [id])
+  ppe      PpeItem @relation(fields: [ppeId], references: [id])
+  @@unique([roleId, riskId, ppeId])
 }

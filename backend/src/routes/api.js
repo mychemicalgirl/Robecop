@@ -6,6 +6,7 @@ const { body, validationResult } = require('express-validator')
 const multer = require('multer')
 const path = require('path')
 const fs = require('fs')
+const { param, query } = require('express-validator')
 
 // Multer configuration
 const MAX_FILE_SIZE = 5 * 1024 * 1024 // 5 MB
@@ -135,20 +136,128 @@ router.get('/stock', verifyToken, async (req, res) => {
 })
 
 // --- Assign PPE to employee ---
+// Accept either single ppeId or array of ppeIds for bulk assignment
 router.post('/assign',
   verifyToken,
   requireRole('Admin','Supervisor'),
-  body('ppeId').isInt(),
   body('employeeId').isInt(),
+  body('ppeIds').optional().isArray(),
+  body('ppeId').optional().isInt(),
   body('expiresAt').optional().isISO8601(),
   async (req, res) => {
     const errors = validationResult(req)
     if (!errors.isEmpty()) return res.status(400).json({ errors: errors.array() })
-    const { ppeId, employeeId, expiresAt } = req.body
-    const assignment = await prisma.ppeAssignment.create({
-      data: { ppeId: Number(ppeId), employeeId: Number(employeeId), expiresAt: expiresAt ? new Date(expiresAt) : null }
-    })
-    res.json(assignment)
+    const { ppeIds, ppeId, employeeId, expiresAt } = req.body
+    const ids = ppeIds && ppeIds.length ? ppeIds.map(Number) : (ppeId ? [Number(ppeId)] : [])
+    if (!ids.length) return res.status(400).json({ error: 'No PPE ids provided' })
+    const created = []
+    for (const id of ids) {
+      const a = await prisma.ppeAssignment.create({ data: { ppeId: id, employeeId: Number(employeeId), expiresAt: expiresAt ? new Date(expiresAt) : null } })
+      created.push(a)
+    }
+    res.json(created)
+  })
+
+// Remove an assignment by id or by employeeId + ppeId
+router.delete('/assign',
+  verifyToken,
+  requireRole('Admin','Supervisor'),
+  query('id').optional().isInt(),
+  async (req, res) => {
+    try {
+      const id = req.query.id ? Number(req.query.id) : null
+      if (id) {
+        await prisma.ppeAssignment.delete({ where: { id } })
+        return res.json({ deleted: id })
+      }
+      const { employeeId, ppeId } = req.body
+      if (employeeId && ppeId) {
+        const ass = await prisma.ppeAssignment.findFirst({ where: { employeeId: Number(employeeId), ppeId: Number(ppeId) } })
+        if (!ass) return res.status(404).json({ error: 'Assignment not found' })
+        await prisma.ppeAssignment.delete({ where: { id: ass.id } })
+        return res.json({ deleted: ass.id })
+      }
+      return res.status(400).json({ error: 'Provide id or (employeeId and ppeId)' })
+    } catch (err) {
+      console.error('delete assign error', err)
+      res.status(500).json({ error: 'Could not delete assignment' })
+    }
+  })
+
+// --- Suggestions: recommended PPE for a role ---
+router.get('/suggestions/for-role/:roleId',
+  verifyToken,
+  requireRole('Admin','Supervisor'),
+  param('roleId').isInt(),
+  async (req, res) => {
+    const errors = validationResult(req)
+    if (!errors.isEmpty()) return res.status(400).json({ errors: errors.array() })
+    const roleId = Number(req.params.roleId)
+    const recs = await prisma.recommendedPpe.findMany({ where: { roleId }, include: { ppe: true, risk: true } })
+    const unique = {}
+    for (const r of recs) {
+      if (!unique[r.ppe.id]) unique[r.ppe.id] = { id: r.ppe.id, name: r.ppe.name, sku: r.ppe.sku, risk: r.risk.name }
+    }
+    res.json(Object.values(unique))
+  })
+
+// --- Dashboard statuses: traffic-light per employee ---
+router.get('/dashboard/status',
+  verifyToken,
+  requireRole('Admin','Supervisor'),
+  query('thresholdDays').optional().isInt(),
+  query('roleId').optional().isInt(),
+  query('riskId').optional().isInt(),
+  async (req, res) => {
+    try {
+      const thresholdDays = req.query.thresholdDays ? Number(req.query.thresholdDays) : Number(process.env.EXPIRY_THRESHOLD_DAYS || 30)
+      const roleId = req.query.roleId ? Number(req.query.roleId) : null
+      const riskId = req.query.riskId ? Number(req.query.riskId) : null
+      const now = new Date()
+      const soon = new Date(Date.now() + thresholdDays * 24 * 60 * 60 * 1000)
+
+      const employeeWhere = roleId ? { where: { roleId } } : {}
+      const employees = await prisma.employee.findMany({ include: { role: true }, ...(employeeWhere) })
+
+      const results = []
+      for (const emp of employees) {
+        const assignments = await prisma.ppeAssignment.findMany({ where: { employeeId: emp.id } , include: { ppe: true}})
+        const assignedIds = assignments.map(a => a.ppeId)
+        let status = 'green'
+        let nearestExpires = null
+        let hasExpired = false
+        let hasExpiringSoon = false
+        for (const a of assignments) {
+          if (a.expiresAt) {
+            const e = new Date(a.expiresAt)
+            if (e < now) hasExpired = true
+            else if (e <= soon) hasExpiringSoon = true
+            if (!nearestExpires || e < nearestExpires) nearestExpires = e
+          }
+        }
+        // recommended PPE for role
+        const recs = await prisma.recommendedPpe.findMany({ where: { roleId: emp.roleId }, include: { ppe: true } })
+        const recIds = recs.map(r => r.ppeId)
+        const missing = recIds.filter(id => !assignedIds.includes(id))
+
+        if (hasExpired || missing.length > 0) status = 'red'
+        else if (hasExpiringSoon) status = 'yellow'
+
+        // Optionally filter by riskId: only include employees with recommendedPpe including that risk
+        if (riskId) {
+          const rr = await prisma.recommendedPpe.findFirst({ where: { roleId: emp.roleId, riskId } })
+          if (!rr) continue
+        }
+
+        results.push({ employee: { id: emp.id, firstName: emp.firstName, lastName: emp.lastName, role: emp.role.name }, status, assigned: assignments.map(a=>({ id: a.id, ppeId: a.ppeId, name: a.ppe.name, expiresAt: a.expiresAt })), recommended: recs.map(r=>({ ppeId: r.ppeId, name: r.ppe.name })) , nearestExpires })
+      }
+
+      const counts = results.reduce((acc, r) => { acc[r.status] = (acc[r.status] || 0) + 1; return acc }, {})
+      res.json({ counts, results })
+    } catch (err) {
+      console.error('dashboard status error', err)
+      res.status(500).json({ error: 'Could not compute dashboard status' })
+    }
   })
 
 // --- Reports (simple summary) ---

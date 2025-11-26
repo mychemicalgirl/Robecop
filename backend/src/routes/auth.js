@@ -2,6 +2,7 @@ const express = require('express')
 const router = express.Router()
 const jwt = require('jsonwebtoken')
 const bcrypt = require('bcrypt')
+const { body, validationResult } = require('express-validator')
 const prisma = require('../prismaClient')
 const { cca } = require('../msalClient')
 
@@ -19,26 +20,40 @@ function getAuthCodeUrlParams() {
 
 // Local JWT login for scaffold/testing
 // In production you may integrate Microsoft Entra ID (OAuth2) and exchange tokens
-router.post('/login', async (req, res) => {
-  const { email, password } = req.body
-  if (AUTH_MODE === 'ENTRA') return res.status(400).json({ error: 'Local login disabled when AUTH_MODE=ENTRA' })
-  if (!email || !password) return res.status(400).json({ error: 'email and password required' })
-  const user = await prisma.user.findUnique({ where: { email }, include: { role: true } })
-  if (!user) return res.status(401).json({ error: 'Invalid credentials' })
-  const ok = await bcrypt.compare(password, user.password || '')
-  if (!ok) return res.status(401).json({ error: 'Invalid credentials' })
-  const token = jwt.sign({ userId: user.id }, process.env.JWT_SECRET || 'change_this_secret', { expiresIn: '8h' })
-  res.json({ token, user: { id: user.id, email: user.email, role: user.role.name } })
-})
+router.post('/login',
+  body('email').isEmail(),
+  body('password').isLength({ min: 4 }),
+  async (req, res) => {
+    if (AUTH_MODE === 'ENTRA') return res.status(400).json({ error: 'Local login disabled when AUTH_MODE=ENTRA' })
+    const errors = validationResult(req)
+    if (!errors.isEmpty()) return res.status(400).json({ errors: errors.array() })
+    const { email, password } = req.body
+    const user = await prisma.user.findUnique({ where: { email }, include: { role: true } })
+    if (!user) return res.status(401).json({ error: 'Invalid credentials' })
+    const ok = await bcrypt.compare(password, user.password || '')
+    if (!ok) return res.status(401).json({ error: 'Invalid credentials' })
+    const token = jwt.sign({ userId: user.id }, process.env.JWT_SECRET || 'change_this_secret', { expiresIn: '8h' })
+    // If configured, set token as HttpOnly cookie for browser sessions
+    if ((process.env.USE_COOKIES || 'false') === 'true') {
+      const isSecure = (process.env.NODE_ENV || 'development') === 'production'
+      res.cookie('robecop_token', token, { httpOnly: true, secure: isSecure, sameSite: 'lax', maxAge: 1000 * 60 * 60 * 8 })
+    }
+    res.json({ token, user: { id: user.id, email: user.email, role: user.role.name } })
+  })
 
 // Simple registration route for bootstrap/testing
-router.post('/register', async (req, res) => {
-  const { email, password, name, roleName } = req.body
-  const role = await prisma.role.findUnique({ where: { name: roleName || 'Employee' } })
-  const hashed = await bcrypt.hash(password || 'password', 10)
-  const user = await prisma.user.create({ data: { email, password: hashed, name, roleId: role.id } })
-  res.json({ id: user.id, email: user.email })
-})
+router.post('/register',
+  body('email').isEmail(),
+  body('password').isLength({ min: 6 }),
+  async (req, res) => {
+    const errors = validationResult(req)
+    if (!errors.isEmpty()) return res.status(400).json({ errors: errors.array() })
+    const { email, password, name, roleName } = req.body
+    const role = await prisma.role.findUnique({ where: { name: roleName || 'Employee' } })
+    const hashed = await bcrypt.hash(password || 'password', 10)
+    const user = await prisma.user.create({ data: { email, password: hashed, name, roleId: role.id } })
+    res.json({ id: user.id, email: user.email })
+  })
 
 // Placeholder for Microsoft Entra ID OAuth integration
 // MS Entra login start: redirect to Microsoft login page

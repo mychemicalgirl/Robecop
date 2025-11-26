@@ -10,6 +10,13 @@ export default function Assign() {
 
   useEffect(()=>{
     const base = process.env.NEXT_PUBLIC_API_BASE || 'http://localhost:4000'
+    try {
+      const u = JSON.parse(localStorage.getItem('robecop_user') || 'null')
+      if (!u || (u.role !== 'Admin' && u.role !== 'Supervisor')) {
+        window.location.href = '/login'
+        return
+      }
+    } catch (e) { window.location.href = '/login'; return }
     fetch(`${base}/api/employees`).then(r=>r.json()).then(setEmployees)
     fetch(`${base}/api/ppe`).then(r=>r.json()).then(setPpe)
   }, [])

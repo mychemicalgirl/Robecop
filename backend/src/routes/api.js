@@ -2,6 +2,7 @@ const express = require('express')
 const router = express.Router()
 const prisma = require('../prismaClient')
 const { verifyToken, requireRole } = require('../middleware/auth')
+const { body, validationResult } = require('express-validator')
 const multer = require('multer')
 const path = require('path')
 const fs = require('fs')
@@ -41,11 +42,19 @@ router.get('/employees', verifyToken, async (req, res) => {
   res.json(list)
 })
 
-router.post('/employees', verifyToken, requireRole('Admin','Supervisor'), async (req, res) => {
-  const { firstName, lastName, email, phone, roleId } = req.body
-  const employee = await prisma.employee.create({ data: { firstName, lastName, email, phone, roleId } })
-  res.json(employee)
-})
+router.post('/employees',
+  verifyToken,
+  requireRole('Admin','Supervisor'),
+  body('firstName').notEmpty(),
+  body('lastName').notEmpty(),
+  body('email').isEmail(),
+  async (req, res) => {
+    const errors = validationResult(req)
+    if (!errors.isEmpty()) return res.status(400).json({ errors: errors.array() })
+    const { firstName, lastName, email, phone, roleId } = req.body
+    const employee = await prisma.employee.create({ data: { firstName, lastName, email, phone, roleId } })
+    res.json(employee)
+  })
 
 // --- Roles & Risks ---
 router.get('/roles', verifyToken, async (req, res) => {
@@ -62,11 +71,18 @@ router.get('/ppe', verifyToken, async (req, res) => {
   res.json(items)
 })
 
-router.post('/ppe', verifyToken, requireRole('Admin'), async (req, res) => {
-  const data = req.body
-  const created = await prisma.ppeItem.create({ data })
-  res.json(created)
-})
+router.post('/ppe',
+  verifyToken,
+  requireRole('Admin'),
+  body('name').notEmpty(),
+  body('description').optional().isString(),
+  async (req, res) => {
+    const errors = validationResult(req)
+    if (!errors.isEmpty()) return res.status(400).json({ errors: errors.array() })
+    const data = req.body
+    const created = await prisma.ppeItem.create({ data })
+    res.json(created)
+  })
 
 // Upload endpoint: POST /api/ppe/:id/upload
 router.post('/ppe/:id/upload', verifyToken, requireRole('Admin','Supervisor'), upload.single('file'), async (req, res) => {
@@ -119,13 +135,21 @@ router.get('/stock', verifyToken, async (req, res) => {
 })
 
 // --- Assign PPE to employee ---
-router.post('/assign', verifyToken, requireRole('Admin','Supervisor'), async (req, res) => {
-  const { ppeId, employeeId, expiresAt } = req.body
-  const assignment = await prisma.ppeAssignment.create({
-    data: { ppeId, employeeId, expiresAt: expiresAt ? new Date(expiresAt) : null }
+router.post('/assign',
+  verifyToken,
+  requireRole('Admin','Supervisor'),
+  body('ppeId').isInt(),
+  body('employeeId').isInt(),
+  body('expiresAt').optional().isISO8601(),
+  async (req, res) => {
+    const errors = validationResult(req)
+    if (!errors.isEmpty()) return res.status(400).json({ errors: errors.array() })
+    const { ppeId, employeeId, expiresAt } = req.body
+    const assignment = await prisma.ppeAssignment.create({
+      data: { ppeId: Number(ppeId), employeeId: Number(employeeId), expiresAt: expiresAt ? new Date(expiresAt) : null }
+    })
+    res.json(assignment)
   })
-  res.json(assignment)
-})
 
 // --- Reports (simple summary) ---
 router.get('/reports/summary', verifyToken, requireRole('Admin','Supervisor'), async (req, res) => {

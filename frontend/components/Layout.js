@@ -27,9 +27,13 @@ export default function Layout({ children }) {
           <nav className="space-x-4 text-sm flex items-center">
             <Link href="/">Home</Link>
             <Link href="/dashboard">Dashboard</Link>
-            <Link href="/employees">Employees</Link>
+            {user && (user.role === 'Admin' || user.role === 'Supervisor') && (
+              <Link href="/employees">Employees</Link>
+            )}
             <Link href="/ppe">PPE Database</Link>
-            <Link href="/assign">Assign</Link>
+            {user && (user.role === 'Admin' || user.role === 'Supervisor') && (
+              <Link href="/assign">Assign</Link>
+            )}
                 {user ? (
                   <div className="flex items-center space-x-3 ml-4">
                     <span className="text-sm text-gray-600">{user.email}</span>
@@ -47,20 +51,5 @@ export default function Layout({ children }) {
       </footer>
     </div>
   )
-  const [user, setUser] = useState(null)
-
-  useEffect(() => {
-    try {
-      const u = JSON.parse(localStorage.getItem('robecop_user') || 'null')
-      setUser(u)
-    } catch (e) { setUser(null) }
-  }, [])
-
-  function logout() {
-    localStorage.removeItem('robecop_token')
-    localStorage.removeItem('robecop_user')
-    setUser(null)
-    // full reload to clear any cached requests
-    window.location.href = '/'
-  }
 }
+

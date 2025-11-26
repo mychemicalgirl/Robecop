@@ -2,6 +2,8 @@ require('dotenv').config()
 const express = require('express')
 const bodyParser = require('body-parser')
 const cors = require('cors')
+const cookieParser = require('cookie-parser')
+const csurf = require('csurf')
 const authRoutes = require('./routes/auth')
 const apiRoutes = require('./routes/api')
 const prisma = require('./prismaClient')
@@ -9,8 +11,29 @@ const nodemailer = require('nodemailer')
 const cron = require('node-cron')
 
 const app = express()
-app.use(cors())
+
+// CORS: restrict to intranet / trusted frontend origins
+const allowed = (process.env.ALLOWED_ORIGINS || 'http://localhost:3000').split(',').map(s => s.trim()).filter(Boolean)
+app.use(cors({
+  origin: function (origin, callback) {
+    // Allow requests with no origin (mobile apps, curl, same-origin)
+    if (!origin) return callback(null, true)
+    if (allowed.indexOf(origin) !== -1) return callback(null, true)
+    return callback(new Error('CORS policy: origin not allowed'))
+  },
+  credentials: true
+}))
 app.use(bodyParser.json())
+app.use(cookieParser())
+
+// If cookies are used for auth, enable CSRF protection for state-changing routes
+if ((process.env.USE_COOKIES || 'false') === 'true') {
+  app.use(csurf({ cookie: true }))
+  // expose a small endpoint for the frontend to fetch CSRF token
+  app.get('/csrf-token', (req, res) => {
+    res.json({ csrfToken: req.csrfToken() })
+  })
+}
 
 const path = require('path')
 const fs = require('fs')

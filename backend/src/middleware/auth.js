@@ -3,9 +3,12 @@ const prisma = require('../prismaClient')
 
 // Middleware to verify JWT and attach user to request
 async function verifyToken(req, res, next) {
+  // Accept token via Authorization header or HttpOnly cookie `robecop_token`
   const auth = req.headers.authorization
-  if (!auth) return res.status(401).json({ error: 'No authorization header' })
-  const token = auth.split(' ')[1]
+  let token
+  if (auth && auth.split(' ')[0] === 'Bearer') token = auth.split(' ')[1]
+  if (!token && req.cookies && req.cookies.robecop_token) token = req.cookies.robecop_token
+  if (!token) return res.status(401).json({ error: 'No authorization token' })
   try {
     const payload = jwt.verify(token, process.env.JWT_SECRET || 'change_this_secret')
     // Attach minimal user info

@@ -10,11 +10,11 @@ export default function Ppe() {
       {!data ? <div>Loading...</div> : (
         <div className="grid md:grid-cols-3 gap-4">
           {data.map(item => (
-            <div key={item.id} className="p-4 bg-white rounded shadow">
+            <a key={item.id} href={`/ppe/${item.id}`} className="p-4 bg-white rounded shadow block hover:shadow-md">
               <div className="font-semibold">{item.name}</div>
               <div className="text-sm text-gray-500">SKU: {item.sku || '—'}</div>
               <div className="mt-2 text-sm">{item.description}</div>
-            </div>
+            </a>
           ))}
         </div>
       )}

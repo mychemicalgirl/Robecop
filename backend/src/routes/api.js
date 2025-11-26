@@ -2,6 +2,38 @@ const express = require('express')
 const router = express.Router()
 const prisma = require('../prismaClient')
 const { verifyToken, requireRole } = require('../middleware/auth')
+const multer = require('multer')
+const path = require('path')
+const fs = require('fs')
+
+// Multer configuration
+const MAX_FILE_SIZE = 5 * 1024 * 1024 // 5 MB
+const allowedTypes = ['image/jpeg', 'image/png', 'application/pdf']
+
+const storage = multer.diskStorage({
+  destination: (req, file, cb) => {
+    const ppeId = req.params.id
+    const dir = path.join(__dirname, '..', 'uploads', 'ppe', String(ppeId))
+    fs.mkdirSync(dir, { recursive: true })
+    cb(null, dir)
+  },
+  filename: (req, file, cb) => {
+    const ext = path.extname(file.originalname)
+    const name = `${Date.now()}-${Math.random().toString(36).slice(2,8)}${ext}`
+    cb(null, name)
+  }
+})
+
+const upload = multer({
+  storage,
+  limits: { fileSize: MAX_FILE_SIZE },
+  fileFilter: (req, file, cb) => {
+    if (!allowedTypes.includes(file.mimetype)) {
+      return cb(new Error('Invalid file type'))
+    }
+    cb(null, true)
+  }
+})
 
 // --- Employees ---
 router.get('/employees', verifyToken, async (req, res) => {
@@ -34,6 +66,50 @@ router.post('/ppe', verifyToken, requireRole('Admin'), async (req, res) => {
   const data = req.body
   const created = await prisma.ppeItem.create({ data })
   res.json(created)
+})
+
+// Upload endpoint: POST /api/ppe/:id/upload
+router.post('/ppe/:id/upload', verifyToken, requireRole('Admin','Supervisor'), upload.single('file'), async (req, res) => {
+  try {
+    const ppeId = req.params.id
+    if (!req.file) return res.status(400).json({ error: 'No file uploaded' })
+    const fileUrl = `/uploads/ppe/${ppeId}/${req.file.filename}`
+    // Optionally: update ppeItem fields (photo/manual) based on mimetype
+    const mimetype = req.file.mimetype
+    if (mimetype.startsWith('image/')) {
+      await prisma.ppeItem.update({ where: { id: Number(ppeId) }, data: { photoUrl: fileUrl } }).catch(()=>{})
+    } else if (mimetype === 'application/pdf') {
+      await prisma.ppeItem.update({ where: { id: Number(ppeId) }, data: { manualUrl: fileUrl } }).catch(()=>{})
+    }
+    res.json({
+      originalName: req.file.originalname,
+      filename: req.file.filename,
+      size: req.file.size,
+      mimetype: req.file.mimetype,
+      url: fileUrl
+    })
+  } catch (err) {
+    console.error('upload error', err)
+    res.status(500).json({ error: err.message || 'Upload failed' })
+  }
+})
+
+// List uploaded files for a PPE item
+router.get('/ppe/:id/files', verifyToken, async (req, res) => {
+  const ppeId = req.params.id
+  const dir = path.join(__dirname, '..', 'uploads', 'ppe', String(ppeId))
+  try {
+    if (!fs.existsSync(dir)) return res.json([])
+    const files = fs.readdirSync(dir).map(name => {
+      const stat = fs.statSync(path.join(dir, name))
+      const mime = name.toLowerCase().endsWith('.pdf') ? 'application/pdf' : 'image'
+      return { name, size: stat.size, url: `/uploads/ppe/${ppeId}/${name}`, mimetype: mime }
+    })
+    res.json(files)
+  } catch (err) {
+    console.error('list files error', err)
+    res.status(500).json({ error: 'Could not list files' })
+  }
 })
 
 // --- Stock ---

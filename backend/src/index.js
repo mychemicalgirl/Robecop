@@ -12,6 +12,16 @@ const app = express()
 app.use(cors())
 app.use(bodyParser.json())
 
+const path = require('path')
+const fs = require('fs')
+
+// Ensure uploads directory exists
+const uploadsDir = path.join(__dirname, '..', 'uploads')
+if (!fs.existsSync(uploadsDir)) fs.mkdirSync(uploadsDir, { recursive: true })
+
+// Serve uploaded files statically at /uploads
+app.use('/uploads', express.static(uploadsDir))
+
 app.use('/auth', authRoutes)
 app.use('/api', apiRoutes)
 

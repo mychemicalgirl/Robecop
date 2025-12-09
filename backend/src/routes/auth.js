@@ -146,10 +146,15 @@ router.post('/login',
 
     if ((process.env.USE_COOKIES || 'false') === 'true') {
       const isSecure = (process.env.NODE_ENV || 'development') === 'production'
-      const sameSite = process.env.COOKIE_SAMESITE || 'lax'
-      res.cookie('refresh_token', tokens.refreshToken, { httpOnly: true, secure: isSecure, sameSite, maxAge: tokens.expiresAt - Date.now() })
-      res.cookie('access_token', tokens.accessToken, { httpOnly: true, secure: isSecure, sameSite, maxAge: parseInt(process.env.ACCESS_TOKEN_EXPIRES_MINUTES || '15', 10) * 60 * 1000 })
-      return res.json({ user: { id: user.id, email: user.email, role: user.role.name }, accessToken: tokens.accessToken, token: tokens.accessToken })
+      const cookieOpts = {
+        httpOnly: true,
+        sameSite: process.env.COOKIE_SAMESITE || 'Lax',
+        secure: (process.env.COOKIE_SECURE || 'false') === 'true',
+        path: '/',
+      }
+      res.cookie('refresh_token', tokens.refreshToken, { ...cookieOpts, maxAge: tokens.expiresAt - Date.now() })
+      res.cookie('access_token', tokens.accessToken, { ...cookieOpts, maxAge: parseInt(process.env.ACCESS_TOKEN_EXPIRES_MINUTES || '15', 10) * 60 * 1000 })
+      return res.json({ ok: true })
     }
 
     res.json({ token: tokens.accessToken, accessToken: tokens.accessToken, refreshToken: tokens.refreshToken, expiresAt: tokens.expiresAt, user: { id: user.id, email: user.email, role: user.role.name } })
@@ -235,11 +240,15 @@ router.post('/refresh', loginLimiter, async (req, res) => {
     const tokens = await rotateRefresh(raw, ctx)
 
     if ((process.env.USE_COOKIES || 'false') === 'true') {
-      const isSecure = (process.env.NODE_ENV || 'development') === 'production'
-      const sameSite = process.env.COOKIE_SAMESITE || 'lax'
-      res.cookie('refresh_token', tokens.refreshToken, { httpOnly: true, secure: isSecure, sameSite, maxAge: tokens.expiresAt - Date.now() })
-      res.cookie('access_token', tokens.accessToken, { httpOnly: true, secure: isSecure, sameSite, maxAge: parseInt(process.env.ACCESS_TOKEN_EXPIRES_MINUTES || '15', 10) * 60 * 1000 })
-      return res.json({ accessToken: tokens.accessToken, token: tokens.accessToken })
+      const cookieOpts = {
+        httpOnly: true,
+        sameSite: process.env.COOKIE_SAMESITE || 'Lax',
+        secure: (process.env.COOKIE_SECURE || 'false') === 'true',
+        path: '/',
+      }
+      res.cookie('refresh_token', tokens.refreshToken, { ...cookieOpts, maxAge: tokens.expiresAt - Date.now() })
+      res.cookie('access_token', tokens.accessToken, { ...cookieOpts, maxAge: parseInt(process.env.ACCESS_TOKEN_EXPIRES_MINUTES || '15', 10) * 60 * 1000 })
+      return res.json({ ok: true })
     }
 
     res.json({ token: tokens.accessToken, accessToken: tokens.accessToken, refreshToken: tokens.refreshToken, expiresAt: tokens.expiresAt })
@@ -259,10 +268,11 @@ router.post('/logout', async (req, res) => {
     }
   }
   if ((process.env.USE_COOKIES || 'false') === 'true') {
-    res.clearCookie('refresh_token')
-    res.clearCookie('access_token')
+    res.clearCookie('refresh_token', { path: '/' })
+    res.clearCookie('access_token', { path: '/' })
+    return res.status(204).end()
   }
-  res.status(204).send()
+  return res.status(204).end()
 })
 
 module.exports = router

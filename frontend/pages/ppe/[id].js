@@ -1,6 +1,6 @@
 import Layout from '../../components/Layout'
 import { useState, useEffect, useCallback } from 'react'
-import fetcher from '../../utils/fetcher'
+import { apiGet } from '../../lib/apiClient'
 
 export default function PpeDetail({ query }){
   const [item, setItem] = useState(null)
@@ -12,12 +12,13 @@ export default function PpeDetail({ query }){
 
   const load = useCallback(async ()=>{
     try{
-      const base = process.env.NEXT_PUBLIC_API_BASE || 'http://localhost:4000'
-      const p = await fetcher(`${base}/api/ppe`)
+      const pRes = await apiGet('/api/ppe')
+      const p = pRes.ok ? await pRes.json() : []
       const found = p.find(x=>String(x.id)===String(id))
       setItem(found)
-      const f = await fetcher(`${base}/api/ppe/${id}/files`)
-      setFiles(f)
+      const fRes = await apiGet(`/api/ppe/${id}/files`)
+      const filesList = fRes.ok ? await fRes.json() : []
+      setFiles(filesList)
     }catch(e){ setError(e.message || 'Failed to load') }
   }, [id])
 
@@ -25,17 +26,21 @@ export default function PpeDetail({ query }){
 
   async function uploadFile(file){
     setError(null)
-    const base = process.env.NEXT_PUBLIC_API_BASE || 'http://localhost:4000'
-    const token = localStorage.getItem('robecop_token')
-    const fd = new FormData()
-    fd.append('file', file)
-    const res = await fetch(`${base}/api/ppe/${id}/upload`, { method: 'POST', headers: { Authorization: token ? `Bearer ${token}` : '' }, body: fd })
-    if (!res.ok) {
-      const text = await res.text()
-      throw new Error(text || 'Upload failed')
-    }
-    const j = await res.json()
-    setFiles(f=>[j, ...f])
+    try {
+      const base = process.env.NEXT_PUBLIC_API_URL || process.env.NEXT_PUBLIC_API_BASE || 'http://localhost:4000'
+      const ct = await fetch(`${base}/csrf-token`, { credentials: 'include' })
+      if (!ct.ok) throw new Error('Failed to get CSRF token')
+      const cj = await ct.json()
+      const fd = new FormData()
+      fd.append('file', file)
+      const res = await fetch(`${base}/api/ppe/${id}/upload`, { method: 'POST', headers: { 'x-csrf-token': cj.csrfToken }, credentials: 'include', body: fd })
+      if (!res.ok) {
+        const text = await res.text()
+        throw new Error(text || 'Upload failed')
+      }
+      const j = await res.json()
+      setFiles(f=>[j, ...f])
+    } catch (e) { throw e }
   }
 
   function handleDrop(e){

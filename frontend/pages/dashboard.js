@@ -1,5 +1,6 @@
 import Layout from '../components/Layout'
 import { useEffect, useState } from 'react'
+import { apiGet } from '../lib/apiClient'
 
 export default function Dashboard() {
   const [data, setData] = useState(null)
@@ -8,11 +9,16 @@ export default function Dashboard() {
   const [roleFilter, setRoleFilter] = useState('')
 
   useEffect(() => {
-    const base = process.env.NEXT_PUBLIC_API_BASE || 'http://localhost:4000'
-    const token = localStorage.getItem('robecop_token')
     setLoading(true)
-    fetch(`${base}/api/dashboard/status?thresholdDays=${threshold}${roleFilter ? `&roleId=${roleFilter}` : ''}`, { headers: { Authorization: token ? `Bearer ${token}` : '' } })
-      .then(r => r.json()).then(setData).catch(()=>setData(null)).finally(()=>setLoading(false))
+    (async () => {
+      try {
+        const r = await apiGet(`/api/dashboard/status?thresholdDays=${threshold}${roleFilter ? `&roleId=${roleFilter}` : ''}`)
+        if (!r.ok) { setData(null); return }
+        const j = await r.json()
+        setData(j)
+      } catch (e) { setData(null) }
+      finally { setLoading(false) }
+    })()
   }, [threshold, roleFilter])
 
   function colorFor(status) {

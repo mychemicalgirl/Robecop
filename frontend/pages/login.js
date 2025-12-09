@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { useRouter } from 'next/router'
 import Layout from '../components/Layout'
+import { apiMutate } from '../lib/apiClient'
 
 export default function Login(){
   const [email, setEmail] = useState('')
@@ -12,14 +13,10 @@ export default function Login(){
     e.preventDefault()
     setErr(null)
     try{
-      const res = await fetch(`${process.env.NEXT_PUBLIC_API_BASE || 'http://localhost:4000'}/auth/login`,{
-        method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ email, password })
-      })
+      const res = await apiMutate('/auth/login', 'POST', { email, password })
       if (!res.ok) throw new Error('Login failed')
-      const data = await res.json()
-      // store token and user
-      localStorage.setItem('robecop_token', data.token)
-      localStorage.setItem('robecop_user', JSON.stringify(data.user))
+      // On cookie-flow the server sets HttpOnly cookies; optionally preload user data:
+      // await apiGet('/api/me')
       router.push('/dashboard')
     }catch(e){
       setErr(e.message || 'Login failed')

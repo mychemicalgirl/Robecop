@@ -1,22 +1,29 @@
 import Link from 'next/link'
 import { useEffect, useState } from 'react'
+import { useRouter } from 'next/router'
+import { apiGet, apiMutate } from '../lib/apiClient'
 
 export default function Layout({ children }) {
   const [user, setUser] = useState(null)
+  const router = useRouter()
 
   useEffect(() => {
-    try {
-      const u = JSON.parse(localStorage.getItem('robecop_user') || 'null')
-      setUser(u)
-    } catch (e) { setUser(null) }
+    (async () => {
+      try {
+        const r = await apiGet('/api/me')
+        if (!r.ok) { setUser(null); return }
+        const u = await r.json()
+        setUser(u)
+      } catch (e) { setUser(null) }
+    })()
   }, [])
 
-  function logout() {
-    localStorage.removeItem('robecop_token')
-    localStorage.removeItem('robecop_user')
+  async function logout() {
+    try {
+      await apiMutate('/auth/logout', 'POST')
+    } catch (e) {}
     setUser(null)
-    // full reload to clear any cached requests
-    window.location.href = '/'
+    router.replace('/login')
   }
 
   return (

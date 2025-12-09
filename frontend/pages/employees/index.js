@@ -1,17 +1,20 @@
 import Layout from '../../components/Layout'
-import { useEffect } from 'react'
-import useSWR from 'swr'
-import fetcher from '../../utils/fetcher'
+import { useEffect, useState } from 'react'
+import { apiGet } from '../../lib/apiClient'
 
 export default function Employees() {
-  const { data, error } = useSWR(`${process.env.NEXT_PUBLIC_API_BASE || 'http://localhost:4000'}/api/employees`, fetcher)
+  const [data, setData] = useState(null)
   useEffect(() => {
-    try {
-      const u = JSON.parse(localStorage.getItem('robecop_user') || 'null')
-      if (!u || (u.role !== 'Admin' && u.role !== 'Supervisor')) {
-        window.location.href = '/login'
-      }
-    } catch (e) { window.location.href = '/login' }
+    (async () => {
+      try {
+        const mu = await apiGet('/api/me')
+        if (!mu.ok) { window.location.href = '/login'; return }
+        const user = await mu.json()
+        if (!user || (user.role !== 'Admin' && user.role !== 'Supervisor')) { window.location.href = '/login'; return }
+        const r = await apiGet('/api/employees')
+        if (r.ok) setData(await r.json())
+      } catch (e) { window.location.href = '/login' }
+    })()
   }, [])
   return (
     <Layout>

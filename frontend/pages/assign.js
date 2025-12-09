@@ -1,5 +1,6 @@
 import Layout from '../components/Layout'
 import { useState, useEffect } from 'react'
+import { apiGet, apiMutate } from '../lib/apiClient'
 
 export default function Assign() {
   const [employees, setEmployees] = useState([])
@@ -11,16 +12,18 @@ export default function Assign() {
   const [selectedList, setSelectedList] = useState([])
 
   useEffect(()=>{
-    const base = process.env.NEXT_PUBLIC_API_BASE || 'http://localhost:4000'
-    try {
-      const u = JSON.parse(localStorage.getItem('robecop_user') || 'null')
-      if (!u || (u.role !== 'Admin' && u.role !== 'Supervisor')) {
-        window.location.href = '/login'
-        return
-      }
-    } catch (e) { window.location.href = '/login'; return }
-    fetch(`${base}/api/employees`).then(r=>r.json()).then(setEmployees)
-    fetch(`${base}/api/ppe`).then(r=>r.json()).then(setPpe)
+    (async () => {
+      try {
+        const mu = await apiGet('/api/me')
+        if (!mu.ok) { window.location.href = '/login'; return }
+        const user = await mu.json()
+        if (!user || (user.role !== 'Admin' && user.role !== 'Supervisor')) { window.location.href = '/login'; return }
+        const re = await apiGet('/api/employees')
+        if (re.ok) setEmployees(await re.json())
+        const rp = await apiGet('/api/ppe')
+        if (rp.ok) setPpe(await rp.json())
+      } catch (e) { window.location.href = '/login' }
+    })()
   }, [])
 
   useEffect(() => {
@@ -28,25 +31,24 @@ export default function Assign() {
     if (!selectedEmp) { setSuggested([]); return }
     const emp = employees.find(e => String(e.id) === String(selectedEmp))
     if (!emp) return
-    const base = process.env.NEXT_PUBLIC_API_BASE || 'http://localhost:4000'
-    const token = localStorage.getItem('robecop_token')
-    fetch(`${base}/api/suggestions/for-role/${emp.roleId}`, { headers: { Authorization: token ? `Bearer ${token}` : '' } })
-      .then(r => r.json()).then(list => {
+    try {
+      apiGet(`/api/suggestions/for-role/${emp.roleId}`).then(r => r.json()).then(list => {
         const arr = list || []
         setSuggested(arr)
         setSelectedList(arr.map(s => s.id || s.ppeId))
       }).catch(()=>{ setSuggested([]); setSelectedList([]) })
+    } catch (e) { setSuggested([]); setSelectedList([]) }
   }, [selectedEmp, employees])
 
   async function submit(e){
     e.preventDefault()
-    const base = process.env.NEXT_PUBLIC_API_BASE || 'http://localhost:4000'
-    const token = localStorage.getItem('robecop_token')
     const unique = Array.from(new Set(selectedList.map(Number)))
     if (!unique.length) return alert('No PPE selected')
-    const res = await fetch(`${base}/api/assign`, { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: token ? `Bearer ${token}` : '' }, body: JSON.stringify({ ppeIds: unique, employeeId: Number(selectedEmp), expiresAt }) })
-    if (res.ok) alert('Assigned successfully')
-    else alert('Assign failed')
+    try {
+      const res = await apiMutate('/api/assign', 'POST', { ppeIds: unique, employeeId: Number(selectedEmp), expiresAt })
+      if (res.ok) alert('Assigned successfully')
+      else alert('Assign failed')
+    } catch (e) { alert('Assign failed') }
   }
 
   return (

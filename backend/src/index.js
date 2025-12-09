@@ -10,6 +10,11 @@ const prisma = require('./prismaClient')
 const nodemailer = require('nodemailer')
 const cron = require('node-cron')
 
+// Optional token cleanup
+if ((process.env.ENABLE_TOKEN_CLEANUP || 'false') === 'true') {
+  try { require('./jobs/cleanupExpiredTokens')() } catch (e) { console.warn('token cleanup job failed to start', e) }
+}
+
 const app = express()
 
 // CORS: restrict to intranet / trusted frontend origins

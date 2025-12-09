@@ -15,6 +15,7 @@ model User {
   role      Role     @relation(fields: [roleId], references: [id])
   roleId    Int
   createdAt DateTime @default(now())
+  refreshTokens RefreshToken[]
 }
 
 model Role {
@@ -101,4 +102,27 @@ model RecommendedPpe {
   risk     Risk    @relation(fields: [riskId], references: [id])
   ppe      PpeItem @relation(fields: [ppeId], references: [id])
   @@unique([roleId, riskId, ppeId])
+}
+
+model RefreshToken {
+  id            Int      @id @default(autoincrement())
+  jti           String   @unique
+  userId        Int
+  tokenHash     String   @db.VarChar(128)
+  issuedAt      DateTime @default(now())
+  expiresAt     DateTime
+  rotatedAt     DateTime?
+  revokedAt     DateTime?
+  reason        String?
+  replacedByJti String?
+  ip            String?
+  userAgent     String?
+  deviceId      String?
+  createdAt     DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id])
+
+  @@index([userId])
+  @@index([tokenHash])
+  @@index([expiresAt])
 }

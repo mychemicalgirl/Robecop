@@ -6,36 +6,10 @@ const { body, validationResult } = require('express-validator')
 const prisma = require('../prismaClient')
 const { cca } = require('../msalClient')
 const loginLimiter = require('../middleware/rateLimiter')
-const crypto = require('crypto')
+const { generateRefreshSecret, generateJti, hashToken, expiresAtDays } = require('../utils/token')
 
-// In-memory refresh token store: token -> { userId, expiresAt, createdAt }
-// NOTE: For production, persist refresh tokens (DB or Redis) and support revocation/rotation.
-const refreshTokens = new Map()
-
-function generateRefreshToken() {
-  return crypto.randomBytes(48).toString('hex')
-}
-
-function createRefreshTokenForUser(userId) {
-  const token = generateRefreshToken()
-  const days = parseInt(process.env.REFRESH_TOKEN_EXPIRES_DAYS || '7', 10)
-  const expiresAt = new Date(Date.now() + days * 24 * 60 * 60 * 1000)
-  refreshTokens.set(token, { userId, expiresAt, createdAt: new Date() })
-  return { token, expiresAt }
-}
-
-function verifyRefreshToken(token) {
-  const rec = refreshTokens.get(token)
-  if (!rec) return null
-  if (rec.expiresAt && new Date() > rec.expiresAt) {
-    refreshTokens.delete(token)
-    return null
-  }
-  return rec
-}
-
-// Read AUTH_MODE from env: 'JWT' (local) or 'ENTRA' (MS Entra ID)
 const AUTH_MODE = (process.env.AUTH_MODE || 'JWT').toUpperCase()
+const REFRESH_PEPPER = process.env.REFRESH_TOKEN_PEPPER || 'change_me'
 
 function getAuthCodeUrlParams() {
   const redirectUri = process.env.AZURE_REDIRECT_URI || 'http://localhost:4000/auth/entra/callback'
@@ -45,9 +19,114 @@ function getAuthCodeUrlParams() {
   }
 }
 
+function signAccessToken(userId) {
+  const accessExpiryMinutes = parseInt(process.env.ACCESS_TOKEN_EXPIRES_MINUTES || '15', 10)
+  return jwt.sign({ userId }, process.env.JWT_SECRET || 'change_this_secret', { expiresIn: `${accessExpiryMinutes}m` })
+}
 
-// Local JWT login for scaffold/testing
-// In production you may integrate Microsoft Entra ID (OAuth2) and exchange tokens
+async function issueTokens(user, ctx = {}) {
+  const jti = generateJti()
+  const secret = generateRefreshSecret()
+  const tokenHash = hashToken(secret, REFRESH_PEPPER)
+  const days = parseInt(process.env.REFRESH_TOKEN_EXPIRES_DAYS || '7', 10)
+  const expiresAt = expiresAtDays(days)
+
+  await prisma.refreshToken.create({ data: {
+    jti,
+    userId: user.id,
+    tokenHash,
+    expiresAt,
+    ip: ctx.ip || null,
+    userAgent: ctx.userAgent || null,
+    deviceId: ctx.deviceId || null
+  }})
+
+  const accessToken = signAccessToken(user.id)
+  return { accessToken, refreshToken: `${jti}.${secret}`, expiresAt }
+}
+
+async function rotateRefresh(raw, ctx = {}) {
+  if (!raw || typeof raw !== 'string') throw new Error('No refresh token provided')
+  const parts = raw.split('.')
+  if (parts.length !== 2) {
+    throw new Error('Invalid refresh token format')
+  }
+  const [jti, secret] = parts
+  const tokenHash = hashToken(secret, REFRESH_PEPPER)
+  const record = await prisma.refreshToken.findUnique({ where: { jti } })
+  if (!record) {
+    console.warn('Refresh token not found for jti', jti)
+    const e = new Error('Refresh token invalid')
+    e.status = 401
+    throw e
+  }
+  // verify hash
+  if (record.tokenHash !== tokenHash) {
+    console.warn('Refresh token hash mismatch for jti', jti)
+    const e = new Error('Refresh token invalid')
+    e.status = 401
+    throw e
+  }
+  const now = new Date()
+  if (record.expiresAt && record.expiresAt < now) {
+    console.warn('Refresh token expired', jti)
+    const e = new Error('Refresh token expired')
+    e.status = 401
+    throw e
+  }
+  if (record.revokedAt) {
+    console.warn('Refresh token already revoked', jti)
+    const e = new Error('Refresh token revoked')
+    e.status = 401
+    throw e
+  }
+  if (record.rotatedAt || record.replacedByJti) {
+    console.warn('Refresh token already rotated', jti)
+    const e = new Error('Refresh token rotated')
+    e.status = 401
+    throw e
+  }
+
+  // Issue new token
+  const user = await prisma.user.findUnique({ where: { id: record.userId } })
+  if (!user) {
+    const e = new Error('User not found')
+    e.status = 401
+    throw e
+  }
+  const newJti = generateJti()
+  const newSecret = generateRefreshSecret()
+  const newHash = hashToken(newSecret, REFRESH_PEPPER)
+  const days = parseInt(process.env.REFRESH_TOKEN_EXPIRES_DAYS || '7', 10)
+  const newExpiresAt = expiresAtDays(days)
+
+  // create new record
+  await prisma.refreshToken.create({ data: {
+    jti: newJti,
+    userId: user.id,
+    tokenHash: newHash,
+    expiresAt: newExpiresAt,
+    ip: ctx.ip || null,
+    userAgent: ctx.userAgent || null,
+    deviceId: ctx.deviceId || null
+  }})
+
+  // mark old as rotated/revoked
+  await prisma.refreshToken.update({ where: { jti }, data: { rotatedAt: now, revokedAt: now, reason: 'rotation', replacedByJti: newJti } })
+
+  const accessToken = signAccessToken(user.id)
+  return { accessToken, refreshToken: `${newJti}.${newSecret}`, expiresAt: newExpiresAt }
+}
+
+async function revokeByJti(jti, reason = 'logout') {
+  try {
+    await prisma.refreshToken.update({ where: { jti }, data: { revokedAt: new Date(), reason } })
+  } catch (err) {
+    // ignore if not found
+  }
+}
+
+// Local JWT login
 router.post('/login',
   loginLimiter,
   body('email').isEmail(),
@@ -61,27 +140,22 @@ router.post('/login',
     if (!user) return res.status(401).json({ error: 'Invalid credentials' })
     const ok = await bcrypt.compare(password, user.password || '')
     if (!ok) return res.status(401).json({ error: 'Invalid credentials' })
-    const accessExpiryMinutes = parseInt(process.env.ACCESS_TOKEN_EXPIRES_MINUTES || '15', 10)
-    const accessToken = jwt.sign({ userId: user.id }, process.env.JWT_SECRET || 'change_this_secret', { expiresIn: `${accessExpiryMinutes}m` })
 
-    // Create refresh token (in-memory for now)
-    const { token: refreshToken, expiresAt } = createRefreshTokenForUser(user.id)
+    const ctx = { ip: req.ip, userAgent: req.get('user-agent'), deviceId: req.body.deviceId }
+    const tokens = await issueTokens(user, ctx)
 
-    // If configured, set refresh token as HttpOnly cookie for browser sessions
     if ((process.env.USE_COOKIES || 'false') === 'true') {
       const isSecure = (process.env.NODE_ENV || 'development') === 'production'
       const sameSite = process.env.COOKIE_SAMESITE || 'lax'
-      res.cookie('refresh_token', refreshToken, { httpOnly: true, secure: isSecure, sameSite, maxAge: (expiresAt - Date.now()) })
-      // Optionally set access token as cookie as well (short-lived)
-      res.cookie('access_token', accessToken, { httpOnly: true, secure: isSecure, sameSite, maxAge: accessExpiryMinutes * 60 * 1000 })
-      return res.json({ user: { id: user.id, email: user.email, role: user.role.name } })
+      res.cookie('refresh_token', tokens.refreshToken, { httpOnly: true, secure: isSecure, sameSite, maxAge: tokens.expiresAt - Date.now() })
+      res.cookie('access_token', tokens.accessToken, { httpOnly: true, secure: isSecure, sameSite, maxAge: parseInt(process.env.ACCESS_TOKEN_EXPIRES_MINUTES || '15', 10) * 60 * 1000 })
+      return res.json({ user: { id: user.id, email: user.email, role: user.role.name }, accessToken: tokens.accessToken, token: tokens.accessToken })
     }
 
-    // If not using cookies, return both tokens in the response body (include legacy `token` field)
-    res.json({ token: accessToken, accessToken, refreshToken, expiresAt, user: { id: user.id, email: user.email, role: user.role.name } })
+    res.json({ token: tokens.accessToken, accessToken: tokens.accessToken, refreshToken: tokens.refreshToken, expiresAt: tokens.expiresAt, user: { id: user.id, email: user.email, role: user.role.name } })
   })
 
-// Simple registration route for bootstrap/testing
+// Registration
 router.post('/register',
   body('email').isEmail(),
   body('password').isLength({ min: 6 }),
@@ -95,15 +169,13 @@ router.post('/register',
     res.json({ id: user.id, email: user.email })
   })
 
-// Placeholder for Microsoft Entra ID OAuth integration
-// MS Entra login start: redirect to Microsoft login page
+// Entra SSO start (unchanged behaviour)
 router.get('/entra/login', async (req, res) => {
   if (AUTH_MODE !== 'ENTRA') return res.status(400).json({ error: 'Entra SSO not enabled (AUTH_MODE != ENTRA)' })
   try {
     const authCodeUrlParams = getAuthCodeUrlParams()
     if (!cca) throw new Error('MSAL client not configured')
     const response = await cca.getAuthCodeUrl(authCodeUrlParams)
-    // Redirect user to Microsoft login (auth URL)
     return res.redirect(response)
   } catch (err) {
     console.error('entra login error', err)
@@ -111,7 +183,6 @@ router.get('/entra/login', async (req, res) => {
   }
 })
 
-// MS Entra callback: exchange code for tokens and sign-in user
 router.get('/entra/callback', async (req, res) => {
   if (AUTH_MODE !== 'ENTRA') return res.status(400).json({ error: 'Entra SSO not enabled (AUTH_MODE != ENTRA)' })
   const code = req.query.code
@@ -130,7 +201,6 @@ router.get('/entra/callback', async (req, res) => {
 
     if (!email) return res.status(400).send('No email claim from Entra')
 
-    // Map Azure email to internal user, create if missing
     const adminEmails = (process.env.AZURE_ADMIN_EMAILS || '').split(',').map(s=>s.trim()).filter(Boolean)
     const supervisorEmails = (process.env.AZURE_SUPERVISOR_EMAILS || '').split(',').map(s=>s.trim()).filter(Boolean)
 
@@ -147,10 +217,8 @@ router.get('/entra/callback', async (req, res) => {
       create: { email, name, roleId: role.id }
     })
 
-    // Issue local JWT for session handling and return to frontend
     const token = jwt.sign({ userId: user.id }, process.env.JWT_SECRET || 'change_this_secret', { expiresIn: '8h' })
     const frontend = process.env.FRONTEND_URL || 'http://localhost:3000'
-    // For demo: return token in query so frontend can store it. In production prefer secure cookie.
     return res.redirect(`${frontend}/auth/callback?token=${token}`)
   } catch (err) {
     console.error('entra callback error', err)
@@ -158,41 +226,43 @@ router.get('/entra/callback', async (req, res) => {
   }
 })
 
-// Exchange refresh token for a new access token
-router.post('/refresh', async (req, res) => {
-  const token = req.cookies && req.cookies.refresh_token ? req.cookies.refresh_token : (req.body && req.body.refreshToken)
-  if (!token) return res.status(400).json({ error: 'No refresh token provided' })
-  const rec = verifyRefreshToken(token)
-  if (!rec) return res.status(401).json({ error: 'Refresh token invalid or expired' })
-  // Rotate tokens: remove old, issue new
-  refreshTokens.delete(token)
-  const { token: newRefreshToken, expiresAt } = createRefreshTokenForUser(rec.userId)
-  const accessExpiryMinutes = parseInt(process.env.ACCESS_TOKEN_EXPIRES_MINUTES || '15', 10)
-  const accessToken = jwt.sign({ userId: rec.userId }, process.env.JWT_SECRET || 'change_this_secret', { expiresIn: `${accessExpiryMinutes}m` })
+// Refresh endpoint: rotate stored refresh token
+router.post('/refresh', loginLimiter, async (req, res) => {
+  try {
+    const raw = req.cookies && req.cookies.refresh_token ? req.cookies.refresh_token : (req.body && req.body.refreshToken)
+    if (!raw) return res.status(400).json({ error: 'No refresh token provided' })
+    const ctx = { ip: req.ip, userAgent: req.get('user-agent'), deviceId: req.body.deviceId }
+    const tokens = await rotateRefresh(raw, ctx)
 
-  if ((process.env.USE_COOKIES || 'false') === 'true') {
-    const isSecure = (process.env.NODE_ENV || 'development') === 'production'
-    const sameSite = process.env.COOKIE_SAMESITE || 'lax'
-    res.cookie('refresh_token', newRefreshToken, { httpOnly: true, secure: isSecure, sameSite, maxAge: (expiresAt - Date.now()) })
-    res.cookie('access_token', accessToken, { httpOnly: true, secure: isSecure, sameSite, maxAge: accessExpiryMinutes * 60 * 1000 })
-    return res.json({ ok: true })
+    if ((process.env.USE_COOKIES || 'false') === 'true') {
+      const isSecure = (process.env.NODE_ENV || 'development') === 'production'
+      const sameSite = process.env.COOKIE_SAMESITE || 'lax'
+      res.cookie('refresh_token', tokens.refreshToken, { httpOnly: true, secure: isSecure, sameSite, maxAge: tokens.expiresAt - Date.now() })
+      res.cookie('access_token', tokens.accessToken, { httpOnly: true, secure: isSecure, sameSite, maxAge: parseInt(process.env.ACCESS_TOKEN_EXPIRES_MINUTES || '15', 10) * 60 * 1000 })
+      return res.json({ accessToken: tokens.accessToken, token: tokens.accessToken })
+    }
+
+    res.json({ token: tokens.accessToken, accessToken: tokens.accessToken, refreshToken: tokens.refreshToken, expiresAt: tokens.expiresAt })
+  } catch (err) {
+    console.error('refresh error', err && err.message)
+    return res.status(err && err.status ? err.status : 401).json({ error: err && err.message ? err.message : 'Refresh failed' })
   }
-
-  // Return legacy `token` field for compatibility
-  res.json({ token: accessToken, accessToken, refreshToken: newRefreshToken, expiresAt })
 })
 
-// Logout / revoke refresh token
 router.post('/logout', async (req, res) => {
-  const token = req.cookies && req.cookies.refresh_token ? req.cookies.refresh_token : (req.body && req.body.refreshToken)
-  if (token) {
-    refreshTokens.delete(token)
+  const raw = req.cookies && req.cookies.refresh_token ? req.cookies.refresh_token : (req.body && req.body.refreshToken)
+  if (raw) {
+    const parts = raw.split('.')
+    if (parts.length === 2) {
+      const jti = parts[0]
+      await revokeByJti(jti, 'logout')
+    }
   }
   if ((process.env.USE_COOKIES || 'false') === 'true') {
     res.clearCookie('refresh_token')
     res.clearCookie('access_token')
   }
-  res.json({ ok: true })
+  res.status(204).send()
 })
 
 module.exports = router

@@ -1,11 +1,5 @@
 require('dotenv').config()
-const express = require('express')
-const bodyParser = require('body-parser')
-const cors = require('cors')
-const cookieParser = require('cookie-parser')
-const csurf = require('csurf')
-const authRoutes = require('./routes/auth')
-const apiRoutes = require('./routes/api')
+const app = require('./app')
 const prisma = require('./prismaClient')
 const nodemailer = require('nodemailer')
 const cron = require('node-cron')
@@ -14,16 +8,6 @@ const cron = require('node-cron')
 if ((process.env.ENABLE_TOKEN_CLEANUP || 'false') === 'true') {
   try { require('./jobs/cleanupExpiredTokens')() } catch (e) { console.warn('token cleanup job failed to start', e) }
 }
-
-const app = express()
-
-// CORS: restrict to intranet / trusted frontend origins
-const allowed = (process.env.ALLOWED_ORIGINS || 'http://localhost:3000').split(',').map(s => s.trim()).filter(Boolean)
-// start server
-const app = require('./app')
-const prisma = require('./prismaClient')
-const nodemailer = require('nodemailer')
-const cron = require('node-cron')
 
 // Email helper (configure SMTP via env)
 const transporter = nodemailer.createTransport({
@@ -51,13 +35,6 @@ cron.schedule('0 8 * * *', async () => {
           subject: 'PPE Expiration Alerts',
           text
         })
-      }
-    }
-  } catch (err) { console.error('Cron error', err) }
-})
-
-const port = process.env.PORT || 4000
-app.listen(port, () => console.log(`Backend running on http://localhost:${port}`))
       }
     }
   } catch (err) { console.error('Cron error', err) }

@@ -2,6 +2,66 @@ name: CI
 
 on:
   push:
+    branches: [ main ]
+  pull_request:
+
+jobs:
+  backend-tests:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        ports: ["5432:5432"]
+        env:
+          POSTGRES_USER: robecop
+          POSTGRES_PASSWORD: robecop_pass
+          POSTGRES_DB: robecop_test
+        options: >-
+          --health-cmd="pg_isready -U robecop"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+
+      - name: Install backend deps
+        working-directory: backend
+        run: npm ci
+
+      - name: Generate Prisma client
+        working-directory: backend
+        env:
+          DATABASE_URL: postgresql://robecop:robecop_pass@localhost:5432/robecop_test?schema=public
+        run: npx prisma generate
+
+      - name: Apply migrations (test)
+        working-directory: backend
+        env:
+          NODE_ENV: test
+          DATABASE_URL: postgresql://robecop:robecop_pass@localhost:5432/robecop_test?schema=public
+        run: npx prisma migrate deploy
+
+      - name: Run tests
+        working-directory: backend
+        env:
+          NODE_ENV: test
+          USE_COOKIES: false
+          ACCESS_TOKEN_EXPIRES_MINUTES: 30
+          REFRESH_TOKEN_EXPIRES_DAYS: 7
+          REFRESH_TOKEN_PEPPER: test_pepper
+          DATABASE_URL: postgresql://robecop:robecop_pass@localhost:5432/robecop_test?schema=public
+        run: npm test -- --ci --runInBand
+name: CI
+
+on:
+  push:
   pull_request:
 
 jobs:

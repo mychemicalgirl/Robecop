@@ -34,6 +34,35 @@ npm run dev
 
 Open `http://localhost:3000` for frontend and `http://localhost:4000` for backend API.
 
+## Session & Token Management
+
+Questo portale usa **JWT di accesso** a vita breve e **refresh token** persistenti in database con:
+- **Hash (SHA‑256 + pepper)**: nel DB viene salvato solo l’hash del refresh (mai il valore grezzo).
+- **Formato client**: `"<jti>.<secret>"`; nel DB sono memorizzati `jti` + `tokenHash`.
+- **Rotazione**: ogni chiamata a `/auth/refresh`:
+	- invalida il token usato (`revokedAt`, `rotatedAt`, `reason="rotation"`, `replacedByJti`),
+	- emette una nuova coppia (`accessToken` + nuovo refresh).
+- **Anti‑replay**: il riuso di un token revocato/ruotato risponde `401` e viene loggato.
+- **Cookie HttpOnly** (default): se `USE_COOKIES=true`, il refresh è salvato nel cookie `refresh_token`
+	con `HttpOnly: true`, `SameSite` e `Secure` configurabili via env.
+- **Compatibilità JSON**: se `USE_COOKIES=false`, il refresh è restituito nel body JSON.
+- **Logout**: `POST /auth/logout` revoca il refresh corrente e rimuove il cookie (se presente).
+- **Cleanup job (opzionale)**: un cron giornaliero elimina token scaduti/revocati quando `ENABLE_TOKEN_CLEANUP=true`.
+
+### Variabili d’ambiente
+
+```env
+ACCESS_TOKEN_EXPIRES_MINUTES=30
+REFRESH_TOKEN_EXPIRES_DAYS=14
+REFRESH_TOKEN_PEPPER=change_me
+
+USE_COOKIES=true           # true: usa cookie HttpOnly; false: body JSON
+COOKIE_SAMESITE=Lax        # Lax | Strict | None
+COOKIE_SECURE=false        # in produzione TRUE, con HTTPS
+ENABLE_TOKEN_CLEANUP=false
+
+```
+
 Notes
 - Authentication: JWT-based in this scaffold. Placeholder for Microsoft Entra ID integration is included in the backend auth route.
  - Authentication: JWT-based in this scaffold by default. You can enable Microsoft Entra ID (SSO) by setting `AUTH_MODE=entra` and configuring the Azure app (not enabled by default in this scaffold).
